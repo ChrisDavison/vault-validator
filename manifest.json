@@ -1,0 +1,9 @@
+{
+  "id": "vault-validator",
+  "name": "Vault Validator",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Audit frontmatter and vault conventions, preview selected cleanup fixes, and undo the last batch.",
+  "author": "Vault Validator contributors",
+  "isDesktopOnly": false
+}
