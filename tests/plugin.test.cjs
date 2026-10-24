@@ -109,7 +109,7 @@ test('settings and journal saves are serialized and snapshot their values', asyn
 
 test('orphan report groups unique files and properties, respects scope and ignores resolved targets', async () => {
   const { plugin } = setup();
-  plugin.settings = { ...core.DEFAULTS, allowedOrphanLinks: ['Books', 'Existing'], checkLinks: false, includeDaily: false };
+  plugin.settings = { ...core.DEFAULTS, allowedOrphanLinks: ['Books', 'Existing'], checkLinks: false, includeDaily: false, dailyFolder: 'Daily', templateFolders: ['Templates'], excludedFolders: ['Attachments'] };
   const content = '---\nrelated: ["[[Books]]", "[[Books#Section|Alias]]", "[[Existing]]", "[[Other]]"]\nsubject: "[[Books]]"\n---\n[[Body only]]';
   const paths = ['b.md', 'a.md', 'Templates/Test.md', 'Daily/Test.md', 'Attachments/Test.md', 'Test.base', 'bad.md'];
   plugin.app = {

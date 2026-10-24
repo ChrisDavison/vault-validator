@@ -3,7 +3,26 @@ const assert = require('node:assert/strict');
 const { parse: parseYaml } = require('yaml');
 const c = require('../src/core.cjs');
 const note = (yaml, body = '# Body\n\nKeep this exact.\n') => `---\n${yaml}\n---\n${body}`;
-const audit = (text, options = {}) => c.auditMarkdown({ path: 'Example.md', text, parseYaml, ...options });
+// An example vault with configured conventions. Defaults alone check only Obsidian built-ins.
+const conventions = {
+  ...c.DEFAULTS,
+  dailyFolder: 'Daily',
+  templateFolders: ['Templates'],
+  optionalProperties: ['tags', 'aliases', 'cssclasses', 'authors', 'cuisine', 'shelf'],
+  protectedProperties: ['created'],
+  propertyTypes: { created: 'date', authors: 'multitext', cuisine: 'multitext', project: 'text', series_index: 'number' },
+  statusTags: ['type/project', 'type/effort'],
+  statuses: ['active', 'waiting', 'someday', 'completed'],
+  allowedValues: { recipe_type: ['main meal', 'dessert'] },
+  conflictingProperties: [['simulation', 'recipe_type']],
+  dailyForbiddenProperties: ['categories'],
+  singleLinkProperties: ['project'],
+  linkListProperties: ['categories'],
+  exclusiveTagPrefix: 'type/',
+  controlledTags: ['type/MoC', 'type/project', 'type/effort', 'type/extracted', 'type/collection', 'status/wip', 'status/archived'],
+  requiredSections: [{ tag: 'type/MoC', heading: 'Children', embed: 'Children.base' }, { tag: 'type/project', heading: 'Project material', embed: 'Project Children.base' }],
+};
+const audit = (text, options = {}) => c.auditMarkdown({ path: 'Example.md', text, parseYaml, settings: conventions, ...options });
 const plan = (text, findings = audit(text)) => c.planFixes(new Map([['Example.md', text]]), findings.filter(f => f.fix), parseYaml);
 
 test('empty optional fields removed, false and zero retained', () => {
@@ -29,9 +48,9 @@ test('unknown empty fields are not removed', () => {
 });
 test('created and project status are never removed even if configured optional', () => {
   const text = note('tags: [type/project]\ncreated:\nstatus:');
-  const findings = audit(text, { settings: { ...c.DEFAULTS, optionalProperties: ['created', 'status'] } });
+  const findings = audit(text, { settings: { ...conventions, optionalProperties: ['created', 'status'] } });
   assert.equal(findings.filter(f => f.fix).length, 0);
-  assert.ok(findings.some(f => f.code === 'empty-created'));
+  assert.ok(findings.some(f => f.code === 'empty-protected'));
   assert.ok(findings.some(f => f.code === 'status'));
 });
 test('valid date-only and ISO timestamp values stay untouched', () => {
@@ -86,9 +105,45 @@ test('cleanup is idempotent', () => {
   const after = plan(note('authors: Someone\ntags: [work, work, null]\nshelf:'))[0].after;
   assert.equal(plan(after).length, 0);
 });
-test('role, status and food/camera conventions are reported', () => {
+test('configured role, status, value and conflict conventions are reported', () => {
   const f = audit(note('tags: [type/project, type/roadmap, status/archived]\nstatus: started\nsimulation: Classic Chrome\nrecipe_type: food'));
-  for (const code of ['multiple-roles', 'unknown-tag', 'status', 'recipe-type', 'camera-recipe', 'missing-embed']) assert.ok(f.some(x => x.code === code), code);
+  for (const code of ['multiple-roles', 'unknown-tag', 'status', 'allowed-value', 'conflicting-properties', 'missing-embed']) assert.ok(f.some(x => x.code === code), code);
+  assert.ok(!f.some(x => x.code === 'unknown-tag' && x.message.includes('status/archived')));
+});
+test('default settings check only Obsidian built-ins, not anyone else\'s conventions', () => {
+  const text = note('tags: [type/project, type/roadmap, type/MoC, status/whatever]\nstatus: started\nsimulation: X\nrecipe_type: food\nproject: "Plain text"\ncategories: [plain]\ncreated:\nauthors:\nseries_index: "3"');
+  const f = audit(text, { settings: undefined, path: 'Daily/2026-01-01.md' });
+  assert.deepEqual(f, []);
+});
+test('daily-note property rules apply only inside the configured daily folder', () => {
+  const text = note('categories: ["[[Topic]]"]');
+  assert.ok(audit(text, { path: 'Daily/2026-01-01.md' }).some(f => f.code === 'daily-property'));
+  assert.ok(!audit(text).some(f => f.code === 'daily-property'));
+  assert.ok(!audit(text, { path: 'Daily/2026-01-01.md', settings: { ...conventions, dailyFolder: '' } }).some(f => f.code === 'daily-property'));
+});
+test('link properties must hold unaliased wikilinks', () => {
+  const f = audit(note('project: "[[A|Alias]]"\ncategories: ["[[Topic]]", "plain"]'));
+  assert.ok(f.some(x => x.code === 'single-link'));
+  assert.ok(f.some(x => x.code === 'link-list'));
+  assert.deepEqual(audit(note('project: "[[A]]"\ncategories: ["[[Topic]]"]')), []);
+});
+test('allowed values accept list properties and statuses honour a custom property', () => {
+  assert.ok(audit(note('recipe_type: [dessert, food]')).some(f => f.code === 'allowed-value'));
+  assert.ok(!audit(note('recipe_type: [dessert]')).some(f => f.code === 'allowed-value'));
+  const settings = { ...conventions, statusProperty: 'state' };
+  assert.ok(!audit(note('tags: [type/effort]\nstate: active'), { settings }).some(f => f.code === 'status'));
+  assert.ok(audit(note('tags: [type/effort]\nstate: done'), { settings }).some(f => f.code === 'status'));
+});
+test('settings text parsers drop blank and malformed lines', () => {
+  assert.deepEqual(c.parseList(' /Templates/ \n\nDaily\nDaily'), ['Templates', 'Daily']);
+  assert.deepEqual(c.parsePropertyTypes('created: date\nrating: Number\nbad: colour\nnocolon'), { created: 'date', rating: 'number' });
+  assert.deepEqual(c.parseAllowedValues('recipe_type: main meal, dessert\nempty:\nnone'), { recipe_type: ['main meal', 'dessert'] });
+  assert.deepEqual(c.parseConflicts('simulation, recipe_type\nalone'), [['simulation', 'recipe_type']]);
+  assert.deepEqual(c.parseSections('type/MoC | Children | ![[Children.base]]\nbad | line'), [{ tag: 'type/MoC', heading: 'Children', embed: 'Children.base' }]);
+  const values = { recipe_type: ['main meal', 'dessert'] };
+  assert.deepEqual(c.parseAllowedValues(c.formatSetting.allowedValues(values)), values);
+  const sections = conventions.requiredSections;
+  assert.deepEqual(c.parseSections(c.formatSetting.sections(sections)), sections);
 });
 test('collection and archived tags are allowed while collection still counts as a role', () => {
   assert.deepEqual(audit(note('tags: [type/collection, state/archived]')), []);
@@ -108,6 +163,15 @@ test('unresolved frontmatter links are informational and never fixed', () => {
   const unresolved = f.find(x => x.code === 'unresolved-link');
   assert.equal(unresolved.severity, 'info'); assert.ok(!unresolved.fix);
 });
+test('a positive restriction to another folder counts as a template exclusion', () => {
+  assert.ok(c.excludesFolder('file.inFolder("Projects")', 'Templates'));
+  assert.ok(c.excludesFolder('file.path.startsWith("Daily/")', 'Templates'));
+  assert.ok(!c.excludesFolder('file.inFolder("Templates")', 'Templates'));
+  assert.ok(!c.excludesFolder('file.inFolder("Templates/Nested")', 'Templates'));
+});
+test('Base checks are skipped without template folders', () => {
+  assert.deepEqual(c.auditBase({ path: 'Test.base', text: 'views:\n  - name: All\n    type: table\n', parseYaml }), []);
+});
 test('template exclusion proof respects AND and OR', () => {
   const excludes = '!file.inFolder("Templates")';
   assert.ok(c.excludesFolder({ and: ['recipe_type', excludes] }, 'Templates'));
@@ -118,7 +182,7 @@ test('template exclusion proof respects AND and OR', () => {
 });
 test('Base checks consider view filters independently', () => {
   const text = 'views:\n  - name: All\n    type: table\n  - name: Daily\n    type: table\n    filters: file.path.startsWith("Daily")\n';
-  const f = c.auditBase({ path: 'Test.base', text, parseYaml });
+  const f = c.auditBase({ path: 'Test.base', text, parseYaml, settings: conventions });
   assert.equal(f.length, 1); assert.match(f[0].message, /All/);
 });
 test('inline Base extraction handles callouts and ignores nested examples', () => {
@@ -147,7 +211,7 @@ test('orphan allowlist accepts commas and lines and removes blanks and duplicate
 });
 test('allowed targets suppress only unresolved-link findings with exact target matching', () => {
   const findings = audit(note('categories: ["[[Books]]", "[[Other/Books]]", "[[books]]"]\nrelated: ["[[Books#Heading|Alias]]", "[[Existing]]"]\nseries_index: wrong'), {
-    settings: { ...c.DEFAULTS, allowedOrphanLinks: ['Books'] }, resolveLink: target => target === 'Existing',
+    settings: { ...conventions, allowedOrphanLinks: ['Books'] }, resolveLink: target => target === 'Existing',
   });
   assert.deepEqual(findings.filter(f => f.code === 'unresolved-link').map(f => f.message), [
     'Unresolved property link: Other/Books. This may be intentional.',

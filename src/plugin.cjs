@@ -37,7 +37,7 @@ module.exports = class VaultValidator extends Plugin {
     const types = orphanReport ? {} : await this.propertyTypes();
     const files = (file ? [file] : this.app.vault.getFiles()).filter(f => {
       if (!(orphanReport ? ['md'] : ['md', 'base']).includes(f.extension)) return false;
-      if (!this.settings.includeDaily && core.within(f.path, 'Daily')) return false;
+      if (!this.settings.includeDaily && this.settings.dailyFolder && core.within(f.path, this.settings.dailyFolder)) return false;
       return !this.settings.excludedFolders.some(folder => core.within(f.path, folder));
     }).sort((a, b) => a.path.localeCompare(b.path));
     const findings = [], snapshots = new Map(), orphanGroups = new Map();
@@ -279,28 +279,55 @@ class ValidatorSettings extends PluginSettingTab {
   constructor(app, plugin) { super(app, plugin); this.plugin = plugin; }
   display() {
     const el = this.containerEl; el.empty();
-    el.createEl('h2', { text: 'Vault Validator' });
-    el.createEl('p', { text: 'Audits run only when requested. Fixes always require a preview. Templates are read-only. Types come from the vault’s saved property types, with defaults for common properties in this vault.' });
+    const settings = this.plugin.settings;
     const save = async () => { try { await this.plugin.persist(); } catch (e) { new Notice(`Settings could not be saved: ${e.message}`); } };
-    for (const [key, name] of [['includeDaily', 'Include daily notes'], ['checkLinks', 'Report unresolved frontmatter links'], ['checkBases', 'Check Base template exclusions']]) {
-      new Setting(el).setName(name).addToggle(t => t.setValue(this.plugin.settings[key]).onChange(async v => { this.plugin.settings[key] = v; await save(); }));
-    }
+    const toggle = (key, name, desc) => new Setting(el).setName(name).setDesc(desc)
+      .addToggle(t => t.setValue(settings[key]).onChange(async v => { settings[key] = v; await save(); }));
+    const text = (key, name, desc, placeholder, normalize = v => v.trim()) => new Setting(el).setName(name).setDesc(desc)
+      .addText(t => t.setPlaceholder(placeholder).setValue(settings[key]).onChange(async v => { settings[key] = normalize(v); await save(); }));
+    // Text areas store parsed values; malformed lines are dropped when saved.
+    const area = (key, name, desc, placeholder, parse, format) => new Setting(el).setName(name).setDesc(desc)
+      .addTextArea(t => t.setPlaceholder(placeholder).setValue(format(settings[key])).onChange(async v => { settings[key] = parse(v); await save(); }));
+    const list = (key, name, desc, placeholder) => area(key, name, desc, placeholder, core.parseList, core.formatSetting.list);
+
+    el.createEl('p', { text: 'Audits run only when requested, and fixes always need a preview. Convention checks below are off until you configure them.' });
+
+    new Setting(el).setName('Scope').setHeading();
+    list('templateFolders', 'Template folders', 'One folder per line. Templates are audited but never fixed, and Templater expressions are exempt from value checks.', 'Templates');
+    list('excludedFolders', 'Excluded folders', 'One folder per line. These folders and their contents are not audited.', 'Attachments');
+    text('dailyFolder', 'Daily notes folder', 'Folder holding daily notes. Leave blank if you do not use one.', 'Daily', v => v.trim().replace(/^\/+|\/+$/g, ''));
+    toggle('includeDaily', 'Include daily notes', 'Audit notes in the daily notes folder.');
+
+    new Setting(el).setName('Properties').setHeading();
+    list('optionalProperties', 'Optional properties', 'One property per line. Empty values of these properties can be removed as a fix.', 'tags');
+    list('protectedProperties', 'Protected properties', 'One property per line. These are never removed, and are flagged when empty. Example: created.', 'created');
+    area('propertyTypes', 'Fallback property types', `One "property: type" per line. Used when the vault has no saved type for a property. Types: ${core.PROPERTY_TYPES.join(', ')}.`, 'created: date', core.parsePropertyTypes, core.formatSetting.propertyTypes);
+    area('allowedValues', 'Allowed values', 'One "property: value, value" per line. Other values are reported.', 'priority: low, medium, high', core.parseAllowedValues, core.formatSetting.allowedValues);
+    area('conflictingProperties', 'Conflicting properties', 'One comma-separated group per line. A note using more than one property in a group is reported.', 'isbn, doi', core.parseConflicts, core.formatSetting.conflicts);
+    list('dailyForbiddenProperties', 'Properties not allowed in daily notes', 'One property per line. Requires a daily notes folder.', 'categories');
+
+    new Setting(el).setName('Links').setHeading();
+    toggle('checkLinks', 'Report unresolved frontmatter links', 'Report wikilinks in properties whose target does not exist, as information.');
     new Setting(el).setName('Allowed orphan property links')
-      .setDesc('Link targets allowed to be missing, separated by commas or new lines. Example: Books,SOMETHING_ELSE. Use exact, case-sensitive targets without [[brackets]]. These links are omitted from audits; use “Show allowed unresolved property links” to review their files.')
-      .addTextArea(t => t.setValue(this.plugin.settings.allowedOrphanLinks.join(', ')).onChange(async value => {
-        this.plugin.settings.allowedOrphanLinks = core.parseAllowedOrphanLinks(value);
+      .setDesc('Link targets allowed to be missing, separated by commas or new lines. Use exact, case-sensitive targets without [[brackets]]. These links are omitted from audits; use “Show allowed unresolved property links” to review their files.')
+      .addTextArea(t => t.setPlaceholder('Books, Someday').setValue(settings.allowedOrphanLinks.join(', ')).onChange(async value => {
+        settings.allowedOrphanLinks = core.parseAllowedOrphanLinks(value);
         await save();
       }));
-    for (const [key, name, desc] of [
-      ['templateFolders', 'Template folders', 'One vault-relative folder per line. These folders are audited without fixes.'],
-      ['excludedFolders', 'Excluded folders', 'One vault-relative folder per line. These folders and their contents are not audited.'],
-      ['optionalProperties', 'Optional properties', 'One property per line. Empty values may be removed. created and required project/effort status are always protected.'],
-    ]) {
-      new Setting(el).setName(name).setDesc(desc).addTextArea(t => t.setValue(this.plugin.settings[key].join('\n')).onChange(async v => {
-        this.plugin.settings[key] = [...new Set(v.split('\n').map(s => s.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean))];
-        await save();
-      }));
-    }
-    el.createEl('p', { text: 'The last undo record is stored locally in this plugin’s data.json. It contains original note contents; exclude it when publishing the plugin.' });
+    list('singleLinkProperties', 'Single-link properties', 'One property per line. Each must hold exactly one unaliased wikilink.', 'project');
+    list('linkListProperties', 'Link-list properties', 'One property per line. Each may hold only unaliased wikilinks.', 'categories');
+
+    new Setting(el).setName('Tags and status').setHeading();
+    list('controlledTags', 'Controlled tags', 'One nested tag per line. Each listed tag puts its namespace under control: other tags in that namespace are reported. Example: type/project controls type/*.', 'type/project');
+    text('exclusiveTagPrefix', 'Exclusive tag prefix', 'Notes may carry at most one tag starting with this prefix. Leave blank to skip.', 'type/');
+    list('statusTags', 'Tags requiring a status', 'One tag per line. Notes with these tags must have a valid status property, which is never removed.', 'type/project');
+    text('statusProperty', 'Status property', 'Property checked on notes with a status tag.', 'status');
+    list('statuses', 'Allowed statuses', 'One value per line. Leave empty to skip the status check.', 'active');
+
+    new Setting(el).setName('Sections').setHeading();
+    area('requiredSections', 'Required sections', 'One "tag | heading | embed" per line. Notes with the tag need the embed under that level-two heading.', 'type/project | Tasks | Tasks.base', core.parseSections, core.formatSetting.sections);
+    toggle('checkBases', 'Check Base template exclusions', 'Report Base views that do not exclude the template folders.');
+
+    el.createEl('p', { cls: 'setting-item-description', text: 'The last undo record is stored locally in this plugin’s data.json. It contains original note contents; do not share that file.' });
   }
 }

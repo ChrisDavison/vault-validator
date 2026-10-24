@@ -3,24 +3,34 @@ const core = (() => {
 const module = { exports: {} };
 'use strict';
 
+// Defaults are deliberately neutral: only Obsidian's built-in properties are known.
+// Vault-specific conventions are opt-in through settings; checks with empty settings are skipped.
 const DEFAULTS = {
   includeDaily: true,
-  templateFolders: ['Templates'],
-  excludedFolders: ['Attachments'],
-  optionalProperties: ['tags', 'aliases', 'cssclasses', 'categories', 'authors', 'funder', 'people', 'cuisine', 'project', 'parent_project', 'recipe_type', 'series', 'series_index', 'shelf', 'language', 'source'],
+  dailyFolder: '',
+  templateFolders: [],
+  excludedFolders: [],
+  optionalProperties: ['tags', 'aliases', 'cssclasses'],
+  protectedProperties: [],
+  propertyTypes: {},
   allowedOrphanLinks: [],
   checkLinks: true,
   checkBases: true,
+  statusProperty: 'status',
+  statusTags: [],
+  statuses: [],
+  allowedValues: {},
+  conflictingProperties: [],
+  dailyForbiddenProperties: [],
+  singleLinkProperties: [],
+  linkListProperties: [],
+  exclusiveTagPrefix: '',
+  controlledTags: [],
+  requiredSections: [],
 };
-const COMMON_TYPES = {
-  tags: 'tags', aliases: 'aliases', cssclasses: 'multitext', created: 'date', birthday: 'date',
-  categories: 'multitext', authors: 'multitext', funder: 'multitext', people: 'multitext', cuisine: 'multitext',
-  project: 'text', parent_project: 'text', series_index: 'number',
-};
-const ROLE_TAGS = ['type/MoC', 'type/project', 'type/effort', 'type/meeting', 'type/extracted', 'type/collection'];
-const STATE_TAGS = ['status/priority', 'status/temporary', 'status/wip', 'status/watched', 'status/unprocessed', 'status/archived'];
-const STATUSES = ['active', 'waiting', 'someday', 'completed'];
-const RECIPES = ['main meal', 'dessert', 'bread', 'sauce', 'drink', 'workday lunch'];
+// Obsidian's built-in property types. Saved vault types and the propertyTypes setting extend these.
+const COMMON_TYPES = { tags: 'tags', aliases: 'aliases', cssclasses: 'multitext' };
+const PROPERTY_TYPES = ['text', 'multitext', 'list', 'number', 'checkbox', 'date', 'datetime', 'tags', 'aliases'];
 const isEmpty = v => v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const within = (path, folder) => path === folder || path.startsWith(folder.replace(/\/$/, '') + '/');
@@ -83,6 +93,43 @@ function patchProperty(text, property, next, parseYaml) {
 function parseAllowedOrphanLinks(value) {
   return [...new Set(value.split(/[,\n]/).map(s => s.trim()).filter(Boolean))];
 }
+
+// Settings text parsers. Each accepts one entry per line and ignores blank or malformed lines.
+const lines = value => String(value ?? '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+const splitOnce = (line, sep) => {
+  const i = line.indexOf(sep);
+  return i < 0 ? null : [line.slice(0, i).trim(), line.slice(i + sep.length).trim()];
+};
+const parseList = value => [...new Set(lines(value).map(s => s.replace(/^\/+|\/+$/g, '')).filter(Boolean))];
+function parsePropertyTypes(value) {
+  const out = {};
+  for (const line of lines(value)) {
+    const pair = splitOnce(line, ':');
+    if (pair && pair[0] && PROPERTY_TYPES.includes(pair[1].toLowerCase())) out[pair[0]] = pair[1].toLowerCase();
+  }
+  return out;
+}
+function parseAllowedValues(value) {
+  const out = {};
+  for (const line of lines(value)) {
+    const pair = splitOnce(line, ':');
+    const values = pair ? [...new Set(pair[1].split(',').map(s => s.trim()).filter(Boolean))] : [];
+    if (pair && pair[0] && values.length) out[pair[0]] = values;
+  }
+  return out;
+}
+const parseConflicts = value => lines(value).map(line => [...new Set(line.split(',').map(s => s.trim()).filter(Boolean))]).filter(group => group.length > 1);
+function parseSections(value) {
+  return lines(value).map(line => line.split('|').map(s => s.trim())).filter(parts => parts.length === 3 && parts.every(Boolean))
+    .map(([tag, heading, embed]) => ({ tag, heading, embed: embed.replace(/^!?\[\[|\]\]$/g, '') }));
+}
+const formatSetting = {
+  list: list => (list || []).join('\n'),
+  propertyTypes: map => Object.entries(map || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+  allowedValues: map => Object.entries(map || {}).map(([k, v]) => `${k}: ${v.join(', ')}`).join('\n'),
+  conflicts: groups => (groups || []).map(g => g.join(', ')).join('\n'),
+  sections: sections => (sections || []).map(s => `${s.tag} | ${s.heading} | ${s.embed}`).join('\n'),
+};
 function unresolvedPropertyLinks({ fm, path, resolveLink }) {
   const links = [];
   for (const [property, value] of Object.entries(fm)) {
@@ -97,7 +144,8 @@ function unresolvedPropertyLinks({ fm, path, resolveLink }) {
   return links;
 }
 
-function auditMarkdown({ path, text, parseYaml, types = {}, settings = DEFAULTS, resolveLink }) {
+function auditMarkdown({ path, text, parseYaml, types = {}, settings: given = DEFAULTS, resolveLink }) {
+  const settings = { ...DEFAULTS, ...given };
   const findings = [];
   const add = (code, message, property, extra = {}) => findings.push({ path, code, message, property, severity: 'warning', ...extra });
   let doc;
@@ -106,14 +154,15 @@ function auditMarkdown({ path, text, parseYaml, types = {}, settings = DEFAULTS,
   const template = isTemplate(path, settings);
   const fm = doc.fm;
   const tags = Array.isArray(fm.tags) ? fm.tags.filter(v => typeof v === 'string') : typeof fm.tags === 'string' ? [fm.tags] : [];
-  const operational = tags.some(t => t === 'type/project' || t === 'type/effort');
-  const schema = { ...COMMON_TYPES, ...types };
+  const statusKey = settings.statusProperty || 'status';
+  const operational = tags.some(t => settings.statusTags.includes(t));
+  const schema = { ...COMMON_TYPES, ...settings.propertyTypes, ...types };
   const normalizedTypes = Object.fromEntries(Object.entries(schema).map(([k, v]) => [k.toLowerCase(), v]));
   for (const [key, value] of Object.entries(fm)) {
     if (template && placeholder(value)) continue;
     const type = normalizedTypes[key.toLowerCase()];
     const listType = ['multitext', 'list', 'tags', 'aliases'].includes(type);
-    const required = key === 'created' || (key === 'status' && operational);
+    const required = settings.protectedProperties.includes(key) || (key === statusKey && operational);
     let next = value;
     const reasons = [];
     if (listType && typeof value === 'string' && !isEmpty(value)) {
@@ -153,25 +202,42 @@ function auditMarkdown({ path, text, parseYaml, types = {}, settings = DEFAULTS,
     if (['date', 'datetime'].includes(type) && !validDate(checked, type === 'datetime')) add('invalid-date', 'Expected a valid ISO date or date/time. Existing dates are never rewritten automatically.', key);
   }
   if (!template) {
-    if (Object.hasOwn(fm, 'created') && isEmpty(fm.created)) add('empty-created', 'Created is empty; recover the date from evidence instead of using the modification time.', 'created');
-    if (operational && !STATUSES.includes(fm.status)) add('status', `Project and effort status must be one of: ${STATUSES.join(', ')}.`, 'status');
-    if (!isEmpty(fm.recipe_type) && !RECIPES.includes(fm.recipe_type)) add('recipe-type', `Unknown food recipe type. Expected: ${RECIPES.join(', ')}.`, 'recipe_type');
-    if (!isEmpty(fm.simulation) && !isEmpty(fm.recipe_type)) add('camera-recipe', 'A camera recipe should not have a food recipe_type.', 'recipe_type');
-    if (within(path, 'Daily') && !isEmpty(fm.categories)) add('daily-categories', 'Daily records should not have categories.', 'categories');
-    for (const key of ['project', 'parent_project']) {
-      if (!isEmpty(fm[key]) && !(typeof fm[key] === 'string' && /^\[\[[^\]|#]+\]\]$/.test(fm[key]))) add('ownership-link', 'Use one canonical, unaliased wikilink for project ownership.', key);
+    for (const key of settings.protectedProperties) {
+      if (Object.hasOwn(fm, key) && isEmpty(fm[key])) add('empty-protected', `${key} is empty; recover the value from evidence instead of guessing it.`, key);
     }
-    const cats = Array.isArray(fm.categories) ? fm.categories : isEmpty(fm.categories) ? [] : [fm.categories];
-    if (cats.some(v => typeof v !== 'string' || !/^\[\[[^\]|#]+\]\]$/.test(v))) add('category-link', 'Categories should contain unaliased wikilinks to concepts or maps of content.', 'categories');
-    const roles = tags.filter(t => t.startsWith('type/'));
-    if (new Set(roles).size > 1) add('multiple-roles', 'Use at most one type/* role tag.', 'tags');
+    if (operational && settings.statuses.length && !settings.statuses.includes(fm[statusKey])) add('status', `${statusKey} must be one of: ${settings.statuses.join(', ')}.`, statusKey);
+    for (const [key, allowed] of Object.entries(settings.allowedValues)) {
+      if (isEmpty(fm[key])) continue;
+      const values = Array.isArray(fm[key]) ? fm[key] : [fm[key]];
+      if (values.some(v => !isEmpty(v) && !allowed.includes(v))) add('allowed-value', `Unknown ${key} value. Expected: ${allowed.join(', ')}.`, key);
+    }
+    for (const group of settings.conflictingProperties) {
+      const present = group.filter(key => !isEmpty(fm[key]));
+      if (present.length > 1) add('conflicting-properties', `These properties should not be used together: ${present.join(', ')}.`, present[present.length - 1]);
+    }
+    if (settings.dailyFolder && within(path, settings.dailyFolder)) {
+      for (const key of settings.dailyForbiddenProperties) if (!isEmpty(fm[key])) add('daily-property', `Daily notes should not have ${key}.`, key);
+    }
+    const wikilink = v => typeof v === 'string' && /^\[\[[^\]|#]+\]\]$/.test(v);
+    for (const key of settings.singleLinkProperties) {
+      if (!isEmpty(fm[key]) && !wikilink(fm[key])) add('single-link', `${key} should be one unaliased wikilink.`, key);
+    }
+    for (const key of settings.linkListProperties) {
+      const values = Array.isArray(fm[key]) ? fm[key] : isEmpty(fm[key]) ? [] : [fm[key]];
+      if (values.some(v => !wikilink(v))) add('link-list', `${key} should contain only unaliased wikilinks.`, key);
+    }
+    const prefix = settings.exclusiveTagPrefix;
+    if (prefix && new Set(tags.filter(t => t.startsWith(prefix))).size > 1) add('multiple-roles', `Use at most one ${prefix}* tag.`, 'tags');
+    // A controlled tag puts its namespace (the part before the first /) under control.
+    const namespaces = new Set(settings.controlledTags.filter(t => t.includes('/')).map(t => t.slice(0, t.indexOf('/') + 1)));
     for (const tag of new Set(tags)) {
-      if ((tag.startsWith('type/') && !ROLE_TAGS.includes(tag)) || (tag.startsWith('status/') && !STATE_TAGS.includes(tag))) add('unknown-tag', `Review ${tag}; it is outside this vault's documented role/state tags.`, 'tags');
+      const ns = tag.includes('/') ? tag.slice(0, tag.indexOf('/') + 1) : null;
+      if (ns && namespaces.has(ns) && !settings.controlledTags.includes(tag)) add('unknown-tag', `Review ${tag}; it is not in the configured list of ${ns}* tags.`, 'tags');
     }
     const withoutCode = doc.body.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '');
-    for (const [tag, heading, embed] of [['type/MoC', 'Children', 'Children.base'], ['type/project', 'Project material', 'Project Children.base']]) {
+    for (const { tag, heading, embed } of settings.requiredSections) {
       if (!tags.includes(tag)) continue;
-      const section = new RegExp('^## ' + heading + '[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,2} |$(?![\\s\\S]))', 'm').exec(withoutCode);
+      const section = new RegExp('^## ' + escapeRegex(heading) + '[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,2} |$(?![\\s\\S]))', 'm').exec(withoutCode);
       if (!section || !section[1].includes(`![[${embed}]]`)) add('missing-embed', `Expected ![[${embed}]] under ## ${heading}.`);
     }
     if (settings.checkLinks && resolveLink) {
@@ -189,17 +255,20 @@ function excludesFolder(filter, folder) {
   if (typeof filter === 'string') {
     const s = filter.trim();
     const f = escapeRegex(folder);
+    // A positive restriction to another, unrelated folder also excludes this one.
+    const scope = /^file\.(?:inFolder|path\.startsWith)\(["']([^"']+?)\/?["']\)$/.exec(s);
     return new RegExp('^!file\\.inFolder\\(["\\\']' + f + '["\\\']\\)$').test(s)
       || new RegExp('^!file\\.path\\.startsWith\\(["\\\']' + f + '/?["\\\']\\)$').test(s)
       || /^file\.folder\s*==\s*["']\/["']$/.test(s)
-      || (folder !== 'Daily' && /^file\.path\.startsWith\(["']Daily\/?["']\)$/.test(s));
+      || (!!scope && !within(folder, scope[1]) && !within(scope[1], folder));
   }
   if (!filter || typeof filter !== 'object') return false;
   if (Array.isArray(filter.and)) return filter.and.some(f => excludesFolder(f, folder));
   if (Array.isArray(filter.or) && filter.or.length) return filter.or.every(f => excludesFolder(f, folder));
   return false;
 }
-function auditBase({ path, text, parseYaml, settings = DEFAULTS, line = 1 }) {
+function auditBase({ path, text, parseYaml, settings: given = DEFAULTS, line = 1 }) {
+  const settings = { ...DEFAULTS, ...given };
   let config;
   try { config = parseYaml(text); }
   catch (e) { return [{ path, line, severity: 'warning', code: 'base-yaml', message: `Invalid Base YAML: ${e.message}` }]; }
@@ -261,7 +330,7 @@ async function execute(entries, process, direction = 'apply') {
   return result;
 }
 
-module.exports = { parseAllowedOrphanLinks, unresolvedPropertyLinks, DEFAULTS, COMMON_TYPES, within, isTemplate, isEmpty, validDate, parseDocument, patchProperty, auditMarkdown, excludesFolder, auditBase, embeddedBases, planFixes, execute };
+module.exports = { parseAllowedOrphanLinks, parseList, parsePropertyTypes, parseAllowedValues, parseConflicts, parseSections, formatSetting, unresolvedPropertyLinks, DEFAULTS, COMMON_TYPES, PROPERTY_TYPES, within, isTemplate, isEmpty, validDate, parseDocument, patchProperty, auditMarkdown, excludesFolder, auditBase, embeddedBases, planFixes, execute };
 
 return module.exports;
 })();
@@ -304,7 +373,7 @@ module.exports = class VaultValidator extends Plugin {
     const types = orphanReport ? {} : await this.propertyTypes();
     const files = (file ? [file] : this.app.vault.getFiles()).filter(f => {
       if (!(orphanReport ? ['md'] : ['md', 'base']).includes(f.extension)) return false;
-      if (!this.settings.includeDaily && core.within(f.path, 'Daily')) return false;
+      if (!this.settings.includeDaily && this.settings.dailyFolder && core.within(f.path, this.settings.dailyFolder)) return false;
       return !this.settings.excludedFolders.some(folder => core.within(f.path, folder));
     }).sort((a, b) => a.path.localeCompare(b.path));
     const findings = [], snapshots = new Map(), orphanGroups = new Map();
@@ -546,28 +615,55 @@ class ValidatorSettings extends PluginSettingTab {
   constructor(app, plugin) { super(app, plugin); this.plugin = plugin; }
   display() {
     const el = this.containerEl; el.empty();
-    el.createEl('h2', { text: 'Vault Validator' });
-    el.createEl('p', { text: 'Audits run only when requested. Fixes always require a preview. Templates are read-only. Types come from the vault’s saved property types, with defaults for common properties in this vault.' });
+    const settings = this.plugin.settings;
     const save = async () => { try { await this.plugin.persist(); } catch (e) { new Notice(`Settings could not be saved: ${e.message}`); } };
-    for (const [key, name] of [['includeDaily', 'Include daily notes'], ['checkLinks', 'Report unresolved frontmatter links'], ['checkBases', 'Check Base template exclusions']]) {
-      new Setting(el).setName(name).addToggle(t => t.setValue(this.plugin.settings[key]).onChange(async v => { this.plugin.settings[key] = v; await save(); }));
-    }
+    const toggle = (key, name, desc) => new Setting(el).setName(name).setDesc(desc)
+      .addToggle(t => t.setValue(settings[key]).onChange(async v => { settings[key] = v; await save(); }));
+    const text = (key, name, desc, placeholder, normalize = v => v.trim()) => new Setting(el).setName(name).setDesc(desc)
+      .addText(t => t.setPlaceholder(placeholder).setValue(settings[key]).onChange(async v => { settings[key] = normalize(v); await save(); }));
+    // Text areas store parsed values; malformed lines are dropped when saved.
+    const area = (key, name, desc, placeholder, parse, format) => new Setting(el).setName(name).setDesc(desc)
+      .addTextArea(t => t.setPlaceholder(placeholder).setValue(format(settings[key])).onChange(async v => { settings[key] = parse(v); await save(); }));
+    const list = (key, name, desc, placeholder) => area(key, name, desc, placeholder, core.parseList, core.formatSetting.list);
+
+    el.createEl('p', { text: 'Audits run only when requested, and fixes always need a preview. Convention checks below are off until you configure them.' });
+
+    new Setting(el).setName('Scope').setHeading();
+    list('templateFolders', 'Template folders', 'One folder per line. Templates are audited but never fixed, and Templater expressions are exempt from value checks.', 'Templates');
+    list('excludedFolders', 'Excluded folders', 'One folder per line. These folders and their contents are not audited.', 'Attachments');
+    text('dailyFolder', 'Daily notes folder', 'Folder holding daily notes. Leave blank if you do not use one.', 'Daily', v => v.trim().replace(/^\/+|\/+$/g, ''));
+    toggle('includeDaily', 'Include daily notes', 'Audit notes in the daily notes folder.');
+
+    new Setting(el).setName('Properties').setHeading();
+    list('optionalProperties', 'Optional properties', 'One property per line. Empty values of these properties can be removed as a fix.', 'tags');
+    list('protectedProperties', 'Protected properties', 'One property per line. These are never removed, and are flagged when empty. Example: created.', 'created');
+    area('propertyTypes', 'Fallback property types', `One "property: type" per line. Used when the vault has no saved type for a property. Types: ${core.PROPERTY_TYPES.join(', ')}.`, 'created: date', core.parsePropertyTypes, core.formatSetting.propertyTypes);
+    area('allowedValues', 'Allowed values', 'One "property: value, value" per line. Other values are reported.', 'priority: low, medium, high', core.parseAllowedValues, core.formatSetting.allowedValues);
+    area('conflictingProperties', 'Conflicting properties', 'One comma-separated group per line. A note using more than one property in a group is reported.', 'isbn, doi', core.parseConflicts, core.formatSetting.conflicts);
+    list('dailyForbiddenProperties', 'Properties not allowed in daily notes', 'One property per line. Requires a daily notes folder.', 'categories');
+
+    new Setting(el).setName('Links').setHeading();
+    toggle('checkLinks', 'Report unresolved frontmatter links', 'Report wikilinks in properties whose target does not exist, as information.');
     new Setting(el).setName('Allowed orphan property links')
-      .setDesc('Link targets allowed to be missing, separated by commas or new lines. Example: Books,SOMETHING_ELSE. Use exact, case-sensitive targets without [[brackets]]. These links are omitted from audits; use “Show allowed unresolved property links” to review their files.')
-      .addTextArea(t => t.setValue(this.plugin.settings.allowedOrphanLinks.join(', ')).onChange(async value => {
-        this.plugin.settings.allowedOrphanLinks = core.parseAllowedOrphanLinks(value);
+      .setDesc('Link targets allowed to be missing, separated by commas or new lines. Use exact, case-sensitive targets without [[brackets]]. These links are omitted from audits; use “Show allowed unresolved property links” to review their files.')
+      .addTextArea(t => t.setPlaceholder('Books, Someday').setValue(settings.allowedOrphanLinks.join(', ')).onChange(async value => {
+        settings.allowedOrphanLinks = core.parseAllowedOrphanLinks(value);
         await save();
       }));
-    for (const [key, name, desc] of [
-      ['templateFolders', 'Template folders', 'One vault-relative folder per line. These folders are audited without fixes.'],
-      ['excludedFolders', 'Excluded folders', 'One vault-relative folder per line. These folders and their contents are not audited.'],
-      ['optionalProperties', 'Optional properties', 'One property per line. Empty values may be removed. created and required project/effort status are always protected.'],
-    ]) {
-      new Setting(el).setName(name).setDesc(desc).addTextArea(t => t.setValue(this.plugin.settings[key].join('\n')).onChange(async v => {
-        this.plugin.settings[key] = [...new Set(v.split('\n').map(s => s.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean))];
-        await save();
-      }));
-    }
-    el.createEl('p', { text: 'The last undo record is stored locally in this plugin’s data.json. It contains original note contents; exclude it when publishing the plugin.' });
+    list('singleLinkProperties', 'Single-link properties', 'One property per line. Each must hold exactly one unaliased wikilink.', 'project');
+    list('linkListProperties', 'Link-list properties', 'One property per line. Each may hold only unaliased wikilinks.', 'categories');
+
+    new Setting(el).setName('Tags and status').setHeading();
+    list('controlledTags', 'Controlled tags', 'One nested tag per line. Each listed tag puts its namespace under control: other tags in that namespace are reported. Example: type/project controls type/*.', 'type/project');
+    text('exclusiveTagPrefix', 'Exclusive tag prefix', 'Notes may carry at most one tag starting with this prefix. Leave blank to skip.', 'type/');
+    list('statusTags', 'Tags requiring a status', 'One tag per line. Notes with these tags must have a valid status property, which is never removed.', 'type/project');
+    text('statusProperty', 'Status property', 'Property checked on notes with a status tag.', 'status');
+    list('statuses', 'Allowed statuses', 'One value per line. Leave empty to skip the status check.', 'active');
+
+    new Setting(el).setName('Sections').setHeading();
+    area('requiredSections', 'Required sections', 'One "tag | heading | embed" per line. Notes with the tag need the embed under that level-two heading.', 'type/project | Tasks | Tasks.base', core.parseSections, core.formatSetting.sections);
+    toggle('checkBases', 'Check Base template exclusions', 'Report Base views that do not exclude the template folders.');
+
+    el.createEl('p', { cls: 'setting-item-description', text: 'The last undo record is stored locally in this plugin’s data.json. It contains original note contents; do not share that file.' });
   }
 }
