@@ -139,7 +139,7 @@ class OrphanLinksModal extends ValidatorModal {
   async run() {
     const el = this.contentEl;
     el.empty();
-    el.createEl('h2', { text: 'Allowed unresolved property links' });
+    this.titleEl.setText('Allowed unresolved property links');
     const status = el.createEl('p', { text: 'Reading frontmatter…', attr: { 'aria-live': 'polite' } });
     try {
       const result = await this.plugin.audit(undefined, message => status.setText(message), true);
@@ -147,7 +147,7 @@ class OrphanLinksModal extends ValidatorModal {
       status.setText(`${result.orphanGroups.size} allowed unresolved targets · ${result.scanned} files checked.`);
       el.createEl('p', { text: 'Uses the audit folder and daily-note settings. Templates are excluded. Only targets that are still unresolved are shown.' });
       this.button(el, 'Refresh', () => this.run());
-      if (!result.orphanGroups.size) el.createEl('p', { text: 'No allowed unresolved property links found. Add targets in Settings → Vault Validator → Allowed orphan property links.' });
+      if (!result.orphanGroups.size) el.createEl('p', { text: 'No allowed unresolved property links found. Add targets in the Vault Validator settings under “Allowed orphan property links”.' });
       for (const [target, uses] of [...result.orphanGroups].sort(([a], [b]) => a.localeCompare(b))) {
         const group = el.createEl('details');
         group.open = false;
@@ -173,7 +173,7 @@ class AuditModal extends ValidatorModal {
   onOpen() { super.onOpen(); this.run(); }
   async run() {
     this.contentEl.empty();
-    this.contentEl.createEl('h2', { text: 'Vault Validator' });
+    this.titleEl.setText(this.file ? `Audit: ${this.file.name}` : 'Vault audit');
     const status = this.contentEl.createEl('p', { text: 'Reading frontmatter…', attr: { 'aria-live': 'polite' } });
     try {
       this.result = await this.plugin.audit(this.file, message => status.setText(message));
@@ -185,7 +185,6 @@ class AuditModal extends ValidatorModal {
     const el = this.contentEl; el.empty();
     const { findings, scanned } = this.result;
     const fixable = findings.filter(f => f.fix).length;
-    el.createEl('h2', { text: this.file ? `Audit: ${this.file.name}` : 'Vault audit' });
     el.createEl('p', { text: `${scanned} ${scanned === 1 ? 'file' : 'files'} checked · ${findings.length} findings · ${fixable} selectable fixes. No files changed by this audit.` });
     const controls = el.createDiv({ cls: 'vv-controls' });
     const search = controls.createEl('input', { type: 'search', placeholder: 'Filter by file, property or finding', attr: { 'aria-label': 'Filter findings' } });
@@ -241,7 +240,7 @@ class PreviewModal extends ValidatorModal {
   onOpen() {
     super.onOpen();
     const el = this.contentEl;
-    el.createEl('h2', { text: this.isUndo ? 'Preview undo' : 'Preview selected fixes' });
+    this.titleEl.setText(this.isUndo ? 'Preview undo' : 'Preview selected fixes');
     el.createEl('p', { text: `${this.plans.length} ${this.plans.length === 1 ? 'file' : 'files'}. Files changed since this snapshot will be skipped.` });
     el.createEl('p', { text: this.isUndo ? 'Only files still matching the saved result will be restored. Newer edits are protected.' : 'A local undo record is saved before writing. This batch replaces the previous undo record. Note bodies are preserved.' });
     const container = el.createDiv({ cls: 'vv-preview' });
@@ -250,7 +249,7 @@ class PreviewModal extends ValidatorModal {
       section.open = this.plans.length <= 5;
       section.createEl('summary', { text: plan.path });
       for (const change of plan.changes) {
-        section.createEl('h4', { text: change.property });
+        section.createDiv({ text: change.property, cls: 'vv-change-property' });
         const grid = section.createDiv({ cls: 'vv-diff' });
         for (const [label, content] of [['Before', this.isUndo ? change.after : change.before], ['After', this.isUndo ? change.before : change.after]]) {
           const col = grid.createDiv(); col.createEl('strong', { text: label }); col.createEl('pre', { text: content });

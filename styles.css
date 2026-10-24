@@ -15,3 +15,4 @@
 .vault-validator .vv-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .vault-validator pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: var(--background-secondary); }
 @media (max-width: 600px) { .vault-validator .vv-diff { grid-template-columns: 1fr; } }
+.vault-validator .vv-change-property { font-weight: var(--font-semibold); margin: 8px 0 4px; }
