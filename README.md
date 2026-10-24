@@ -80,6 +80,10 @@ Only the last batch is kept: applying a new batch replaces the undo record. Batc
 
 The plugin's `data.json` holds your settings and the original contents of the last batch of fixed notes, so do not share it.
 
+## Vault access
+
+Auditing the whole vault needs a list of every file, so the plugin enumerates the vault with `Vault.getFiles()`. It reads only Markdown notes and Bases outside your excluded folders, plus Obsidian's property types file (`.obsidian/types.json`). It does this only when you run an audit command, and nothing leaves your device: the plugin makes no network requests and stores only its settings and undo record.
+
 ## Installation
 
 From Obsidian: open **Settings → Community plugins → Browse**, search for **Vault Validator**, install it and enable it.
