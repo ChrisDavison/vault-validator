@@ -15,7 +15,7 @@ const COMMON_TYPES = {
   project: 'text', parent_project: 'text', series_index: 'number',
 };
 const ROLE_TAGS = ['type/MoC', 'type/project', 'type/effort', 'type/meeting', 'type/extracted', 'type/collection'];
-const STATE_TAGS = ['status/priority', 'status/temporary', 'status/wip', 'status/watched', 'status/unprocessed', 'state/archived'];
+const STATE_TAGS = ['status/priority', 'status/temporary', 'status/wip', 'status/watched', 'status/unprocessed', 'status/archived'];
 const STATUSES = ['active', 'waiting', 'someday', 'completed'];
 const RECIPES = ['main meal', 'dessert', 'bread', 'sauce', 'drink', 'workday lunch'];
 const isEmpty = v => v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
