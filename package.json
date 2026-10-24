@@ -2,11 +2,16 @@
   "name": "obsidian-vault-validator",
   "version": "0.1.0",
   "private": true,
-  "description": "Small, local Obsidian frontmatter validator",
+  "description": "Audit Obsidian note properties against configurable vault conventions",
+  "author": "Chris Davison",
+  "license": "MIT",
+  "repository": "github:ChrisDavison/vault-validator",
   "scripts": {
     "build": "node build.cjs",
     "test": "node --test tests/*.test.cjs",
     "check": "node --check src/core.cjs && node --check src/plugin.cjs && npm test && npm run build && node --check main.js"
   },
-  "devDependencies": { "yaml": "2.8.1" }
+  "devDependencies": {
+    "yaml": "2.8.1"
+  }
 }

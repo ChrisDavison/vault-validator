@@ -3,7 +3,8 @@
   "name": "Vault Validator",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Audit frontmatter and vault conventions, preview selected cleanup fixes, and undo the last batch.",
-  "author": "Vault Validator contributors",
+  "description": "Audit note properties against your vault's conventions, preview safe cleanup fixes, and undo the last batch.",
+  "author": "Chris Davison",
+  "authorUrl": "https://github.com/ChrisDavison",
   "isDesktopOnly": false
 }
