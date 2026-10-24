@@ -1,41 +1,32 @@
 # Validation record
 
-Version: 0.1.0
+## 0.2.0
 
-## Automated checks
+- Vault conventions moved from source constants into settings with neutral defaults. Default settings check only Obsidian's built-in properties, saved property types, dates and unresolved property links.
+- `npm run check` passes 46 tests, source and bundle syntax checks, and the build.
+- New coverage: neutral defaults raise no convention findings, daily-note rules depend on the configured folder, link-property rules, allowed values on list properties, a custom status property, settings text parsers, and positive folder restrictions in Base filters.
+- Compared 0.1.0 and 0.2.0 on a real vault of about 1,800 notes and Bases, with the 0.1.0 conventions entered as settings: both versions produced the same findings.
 
-`npm run check` passes 35 tests, checks source syntax, builds the standalone runtime, and checks the generated runtime syntax.
+## 0.1.0
 
-The tests cover:
+Automated tests cover:
 
 - Empty-value cleanup, preserving `false` and `0`, exact tag deduplication and scalar-to-list conversion.
 - No splitting of comma-containing author names; ambiguous tag strings remain manual review.
-- Date validity, leap years, existing timestamps, template expression handling, and protected `created` values.
-- Invalid/duplicate YAML keys, commented/complex YAML refusal, CRLF/BOM preservation, exact body preservation, selected-property isolation, and idempotence.
-- Vault conventions, unresolved link reporting, inline Base extraction, and conservative template exclusion checks.
-- Stale input and undo conflicts; per-file write failures; durable backup before writes; failure to save the initial backup; recovery from prepared journals; protected-folder changes; serialized settings/journal saves; and overlapping operation prevention.
+- Date validity, leap years, existing timestamps, template expression handling, and protected properties.
+- Invalid or duplicate YAML keys, commented or complex YAML refusal, CRLF and BOM preservation, exact body preservation, selected-property isolation, and idempotence.
+- Unresolved link reporting, the allowed orphan link list, inline Base extraction, and conservative template exclusion checks.
+- Stale input and undo conflicts, per-file write failures, durable backup before writes, failure to save the initial backup, recovery from prepared journals, protected-folder changes, serialised settings and journal saves, and overlapping operation prevention.
 
-## Live Obsidian verification
+Live checks in Obsidian:
 
-- Loaded and enabled the plugin without restarting the app; enabled state saved.
-- Ran a read-only audit of 1,690 Markdown/Base files, including daily notes. Findings reflected current vault state; no fixes were applied to user notes.
-- Used a temporary fixture with a duplicate tag, a null tag entry, a scalar author, a zero number, a valid creation date, and body text.
-- Opened the audit modal, selected the two cleanup findings, and inspected the actual before/after preview in the rendered UI.
-- Applied the two previewed changes through the UI. The result contained a clean tag list and a one-item author list; other properties and the body were preserved.
-- Opened the undo preview and restored the fixture through the UI. Compared the result against the entire exact original string.
-- Removed the fixture and its test undo record after verification.
+- Loaded and enabled the plugin without restarting the app.
+- Ran a read-only audit of a full vault, including daily notes.
+- With a temporary fixture note, selected cleanup findings, inspected the rendered before/after preview, applied the fixes, then restored the original exactly through the undo preview.
+- Confirmed the allowed orphan link sections render collapsed and the setting and command are registered.
 
 ## Limits
 
 - Mobile APIs are compatible by design but have not been tested on a device.
 - Base exclusion checking is deliberately conservative, not a full Bases expression interpreter.
-- Role and lifecycle conventions are specific to this vault. Unknown/legacy tags are warnings, not automatic deletions.
-- The plugin reads explicit saved property types, not Obsidian's undocumented inferred-type registry. Known common properties have fallback types; unknown unregistered properties are not type-checked.
-
-## Allowed orphan property links — 2026-09-29
-
-- Added a comma/newline allowlist and a separate grouped review command. Matching is exact and case-sensitive on the target, ignoring headings and aliases.
-- `npm run check`: passed all 38 tests, source/bundle syntax checks, and build. Regression coverage includes allowlist parsing, audit suppression, retained unrelated findings, grouped unique files/properties, scope exclusions, resolved targets, disabled link reporting, and malformed YAML.
-- Copied the rebuilt `main.js` to the installed plugin and reloaded it successfully.
-- Live Obsidian DOM check with an injected sample report confirmed both target and nested file sections have `open: false`, and file/property labels render. Restored the real audit method immediately after the check; no sample notes or settings were saved.
-- Live settings check confirmed the new setting renders and the command is registered. No captured runtime errors. Console capture was unavailable because the debugger was not attached.
+- The plugin reads saved property types, not Obsidian's undocumented inferred-type registry. Unknown properties without a saved or fallback type are not type-checked.
